@@ -29,10 +29,14 @@ import com.google.api.gax.rpc.ServerStream;
 import com.google.auth.oauth2.AccessToken;
 import com.google.auth.oauth2.OAuth2Credentials;
 import com.google.auto.value.AutoValue;
+import com.google.bigtable.v2.ArrayValue;
 import com.google.bigtable.v2.Column;
 import com.google.bigtable.v2.Family;
 import com.google.bigtable.v2.Row;
+import com.google.bigtable.v2.TypedColumn;
+import com.google.bigtable.v2.TypedFamily;
 import com.google.bigtable.v2.Value;
+import com.google.cloud.Date;
 import com.google.cloud.bigtable.data.v2.BigtableDataClient;
 import com.google.cloud.bigtable.data.v2.BigtableDataSettings;
 import com.google.cloud.bigtable.data.v2.models.BulkMutation;
@@ -43,14 +47,22 @@ import com.google.cloud.bigtable.data.v2.models.Query;
 import com.google.cloud.bigtable.data.v2.models.ReadModifyWriteRow;
 import com.google.cloud.bigtable.data.v2.models.RowCell;
 import com.google.cloud.bigtable.data.v2.models.RowMutation;
+import com.google.cloud.bigtable.data.v2.models.TypedCell;
+import com.google.cloud.bigtable.data.v2.models.TypedQualifier;
+import com.google.cloud.bigtable.data.v2.models.TypedQuery;
+import com.google.cloud.bigtable.data.v2.models.TypedRow;
+import com.google.cloud.bigtable.data.v2.models.TypedRowKey;
 import com.google.cloud.bigtable.data.v2.models.sql.PreparedStatement;
 import com.google.cloud.bigtable.data.v2.models.sql.ResultSet;
 import com.google.cloud.bigtable.data.v2.models.sql.SqlType;
 import com.google.cloud.bigtable.data.v2.stub.EnhancedBigtableStubSettings;
 import com.google.cloud.bigtable.testproxy.CloudBigtableV2TestProxyGrpc.CloudBigtableV2TestProxyImplBase;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.protobuf.ByteString;
+import com.google.protobuf.Timestamp;
 import com.google.protobuf.util.Durations;
+import com.google.protobuf.util.Timestamps;
 import com.google.rpc.Code;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Status;
@@ -65,6 +77,7 @@ import java.io.ByteArrayInputStream;
 import java.io.Closeable;
 import java.io.IOException;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -93,6 +106,15 @@ public class CbtTestProxy extends CloudBigtableV2TestProxyImplBase implements Cl
     abstract BigtableDataSettings settings();
 
     abstract BigtableDataClient dataClient();
+  }
+
+  /**
+   * Registers a pre-configured {@link CbtClient} in the proxy's client map so unit tests can inject
+   * an in-process {@link BigtableDataClient} without going through the {@code CreateClient} RPC.
+   */
+  @VisibleForTesting
+  void registerClientForTest(String clientId, CbtClient client) {
+    idClientMap.put(clientId, client);
   }
 
   private static final Logger logger = Logger.getLogger(CbtTestProxy.class.getName());
@@ -463,6 +485,67 @@ public class CbtTestProxy extends CloudBigtableV2TestProxyImplBase implements Cl
   }
 
   /**
+   * Executes a {@code TypedReadRows} request against the target {@link BigtableDataClient} and
+   * returns the resulting {@link com.google.bigtable.v2.TypedRow} protos and RPC status.
+   */
+  @Override
+  public void typedReadRows(
+      TypedReadRowsRequest request, StreamObserver<TypedRowsResult> responseObserver) {
+    CbtClient client;
+    try {
+      client = getClient(request.getClientId());
+    } catch (StatusException e) {
+      responseObserver.onError(e);
+      return;
+    }
+
+    TypedQuery query;
+    try {
+      query = TypedQuery.fromProto(request.getRequest());
+    } catch (IllegalArgumentException e) {
+      responseObserver.onNext(
+          TypedRowsResult.newBuilder()
+              .setStatus(
+                  com.google.rpc.Status.newBuilder()
+                      .setCode(Code.INVALID_ARGUMENT.getNumber())
+                      .setMessage(e.getMessage() != null ? e.getMessage() : "")
+                      .build())
+              .build());
+      responseObserver.onCompleted();
+      return;
+    }
+
+    TypedRowsResult.Builder resultBuilder = TypedRowsResult.newBuilder();
+    try {
+      ServerStream<TypedRow> rows = client.dataClient().typedReadRows(query);
+      readTypedRowsInto(rows, request.getCancelAfterRows(), resultBuilder);
+      responseObserver.onNext(
+          resultBuilder.setStatus(com.google.rpc.Status.getDefaultInstance()).build());
+    } catch (ApiException e) {
+      responseObserver.onNext(resultBuilder.setStatus(convertStatus(e)).build());
+      responseObserver.onCompleted();
+      return;
+    } catch (StatusRuntimeException e) {
+      responseObserver.onNext(resultBuilder.setStatus(StatusProto.fromThrowable(e)).build());
+      responseObserver.onCompleted();
+      return;
+    } catch (RuntimeException e) {
+      responseObserver.onNext(
+          resultBuilder
+              .setStatus(
+                  com.google.rpc.Status.newBuilder()
+                      .setCode(Code.INTERNAL.getNumber())
+                      .setMessage(e.getMessage() != null ? e.getMessage() : "")
+                      .build())
+              .build());
+      responseObserver.onCompleted();
+      return;
+    }
+
+    responseObserver.onCompleted();
+  }
+
+  /**
    * Helper method to convert row from type com.google.cloud.bigtable.data.v2.models.Row to type
    * com.google.bigtable.v2.Row. After conversion, row cells within the same column and family are
    * grouped and ordered; the ordering of qualifiers within the same family is preserved; but the
@@ -528,6 +611,136 @@ public class CbtTestProxy extends CloudBigtableV2TestProxyImplBase implements Cl
       }
     }
     return resultBuilder;
+  }
+
+  /**
+   * Converts a structured {@link TypedRowKey} into a protobuf {@link Value} containing an {@link
+   * ArrayValue} by reading each field through its typed getter according to {@code schema}.
+   */
+  private static Value convertStructuredRowKey(TypedRowKey rowKey, SqlType.Struct schema) {
+    ArrayValue.Builder arrayBuilder = ArrayValue.newBuilder();
+    for (int i = 0; i < schema.getFields().size(); i++) {
+      if (rowKey.isNull(i)) {
+        arrayBuilder.addValues(Value.getDefaultInstance());
+        continue;
+      }
+      Value.Builder valBuilder = Value.newBuilder();
+      SqlType<?> fieldType = schema.getType(i);
+      switch (fieldType.getCode()) {
+        case BYTES:
+          valBuilder.setBytesValue(rowKey.getBytes(i));
+          break;
+        case STRING:
+          valBuilder.setStringValue(rowKey.getString(i));
+          break;
+        case INT64:
+          valBuilder.setIntValue(rowKey.getLong(i));
+          break;
+        case FLOAT32:
+          valBuilder.setFloatValue(rowKey.getFloat(i));
+          break;
+        case FLOAT64:
+          valBuilder.setFloatValue(rowKey.getDouble(i));
+          break;
+        case BOOL:
+          valBuilder.setBoolValue(rowKey.getBoolean(i));
+          break;
+        case TIMESTAMP:
+          Instant ts = rowKey.getTimestamp(i);
+          valBuilder.setTimestampValue(
+              Timestamp.newBuilder()
+                  .setSeconds(ts.getEpochSecond())
+                  .setNanos(ts.getNano())
+                  .build());
+          break;
+        case DATE:
+          Date date = rowKey.getDate(i);
+          valBuilder.setDateValue(
+              com.google.type.Date.newBuilder()
+                  .setYear(date.getYear())
+                  .setMonth(date.getMonth())
+                  .setDay(date.getDayOfMonth())
+                  .build());
+          break;
+        default:
+          throw new IllegalStateException("Unexpected row key field type: " + fieldType);
+      }
+      arrayBuilder.addValues(valBuilder.build());
+    }
+    return Value.newBuilder().setArrayValue(arrayBuilder.build()).build();
+  }
+
+  /**
+   * Converts a logical {@link TypedRow} from the Java SDK into a protobuf {@link
+   * com.google.bigtable.v2.TypedRow}, preserving family, column qualifier, and cell ordering.
+   */
+  private static com.google.bigtable.v2.TypedRow convertTypedRow(TypedRow row) {
+    com.google.bigtable.v2.TypedRow.Builder rowBuilder =
+        com.google.bigtable.v2.TypedRow.newBuilder();
+
+    if (row.getRowKey().isRaw()) {
+      rowBuilder.setRowKey(Value.newBuilder().setRawValue(row.getRowKey().getRaw()).build());
+    } else {
+      rowBuilder.setRowKey(
+          convertStructuredRowKey(row.getRowKey(), row.getTableSchema().getRowKeySchema().get()));
+    }
+
+    Map<String, Map<TypedQualifier, List<TypedCell>>> grouped =
+        row.getCells().stream()
+            .collect(
+                Collectors.groupingBy(
+                    TypedCell::getFamily,
+                    LinkedHashMap::new,
+                    Collectors.groupingBy(
+                        TypedCell::getTypedQualifier, LinkedHashMap::new, Collectors.toList())));
+
+    for (Map.Entry<String, Map<TypedQualifier, List<TypedCell>>> famEntry : grouped.entrySet()) {
+      TypedFamily.Builder familyBuilder =
+          rowBuilder.addFamiliesBuilder().setFamilyName(famEntry.getKey());
+
+      for (Map.Entry<TypedQualifier, List<TypedCell>> colEntry : famEntry.getValue().entrySet()) {
+        TypedColumn.Builder colBuilder =
+            familyBuilder
+                .addColumnsBuilder()
+                .setQualifier(Value.newBuilder().setRawValue(colEntry.getKey().getBytes()).build());
+
+        for (TypedCell cell : colEntry.getValue()) {
+          colBuilder
+              .addCellsBuilder()
+              .setTimestamp(Timestamps.fromMicros(cell.getTimestamp()))
+              .setValue(Value.newBuilder().setRawValue(cell.getBytesValue()).build())
+              .addAllLabels(cell.getLabels());
+        }
+      }
+    }
+
+    return rowBuilder.build();
+  }
+
+  /**
+   * Reads logical {@link TypedRow}s from {@code rows}, appends their converted protobuf
+   * representations to {@code resultBuilder}, and cancels the stream early if {@code
+   * cancelAfterRows} is reached.
+   *
+   * @param rows Logical rows in ServerStream<TypedRow>
+   * @param cancelAfterRows Ignore the results after this row if set positive
+   * @param resultBuilder Builder to populate with converted rows
+   */
+  private static void readTypedRowsInto(
+      ServerStream<TypedRow> rows, int cancelAfterRows, TypedRowsResult.Builder resultBuilder) {
+    int rowCounter = 0;
+    for (TypedRow row : rows) {
+      rowCounter++;
+      resultBuilder.addRows(convertTypedRow(row));
+
+      if (cancelAfterRows > 0 && rowCounter >= cancelAfterRows) {
+        logger.info(
+            String.format(
+                "Canceling TypedReadRows() to respect cancel_after_rows=%d", cancelAfterRows));
+        rows.cancel();
+        break;
+      }
+    }
   }
 
   @Override
