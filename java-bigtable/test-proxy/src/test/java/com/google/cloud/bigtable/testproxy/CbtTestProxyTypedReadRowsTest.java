@@ -84,8 +84,7 @@ public class CbtTestProxyTypedReadRowsTest {
             .build()
             .start();
 
-    inProcessChannel =
-        InProcessChannelBuilder.forName(serverName).directExecutor().build();
+    inProcessChannel = InProcessChannelBuilder.forName(serverName).directExecutor().build();
 
     testProxy = CbtTestProxy.create();
 
@@ -232,8 +231,7 @@ public class CbtTestProxyTypedReadRowsTest {
                         Type.Struct.Field.newBuilder()
                             .setFieldName("s")
                             .setType(
-                                Type.newBuilder()
-                                    .setStringType(Type.String.getDefaultInstance())))
+                                Type.newBuilder().setStringType(Type.String.getDefaultInstance())))
                     .addFields(
                         Type.Struct.Field.newBuilder()
                             .setFieldName("b")
@@ -274,8 +272,7 @@ public class CbtTestProxyTypedReadRowsTest {
                         Type.Struct.Field.newBuilder()
                             .setFieldName("nullable")
                             .setType(
-                                Type.newBuilder()
-                                    .setStringType(Type.String.getDefaultInstance()))))
+                                Type.newBuilder().setStringType(Type.String.getDefaultInstance()))))
             .build();
 
     TypedRow structuredRow =
@@ -458,8 +455,7 @@ public class CbtTestProxyTypedReadRowsTest {
       mockBigtableService.responses.add(respBuilder.build());
     }
 
-    TypedReadRowsRequest request =
-        defaultTableRequest().toBuilder().setCancelAfterRows(2).build();
+    TypedReadRowsRequest request = defaultTableRequest().toBuilder().setCancelAfterRows(2).build();
 
     TypedRowsResult result = executeTypedReadRows(request);
     assertThat(result.getStatus().getCode()).isEqualTo(Code.OK_VALUE);
@@ -508,7 +504,8 @@ public class CbtTestProxyTypedReadRowsTest {
             .setTableSchema(TableSchema.getDefaultInstance())
             .setResponse(
                 PartialRowResponse.newBuilder()
-                    .setTypedRowsBatch(TypedRowsBatch.newBuilder().setBatchData(batchBytes1).build())
+                    .setTypedRowsBatch(
+                        TypedRowsBatch.newBuilder().setBatchData(batchBytes1).build())
                     .setFlush(
                         PartialRowResponse.Flush.newBuilder()
                             .setChecksum(checksum1)
@@ -521,7 +518,8 @@ public class CbtTestProxyTypedReadRowsTest {
         TypedReadRowsResponse.newBuilder()
             .setResponse(
                 PartialRowResponse.newBuilder()
-                    .setTypedRowsBatch(TypedRowsBatch.newBuilder().setBatchData(batchBytes2).build())
+                    .setTypedRowsBatch(
+                        TypedRowsBatch.newBuilder().setBatchData(batchBytes2).build())
                     .setFlush(
                         PartialRowResponse.Flush.newBuilder()
                             .setChecksum(checksum2)
@@ -561,7 +559,8 @@ public class CbtTestProxyTypedReadRowsTest {
             .setTableSchema(TableSchema.getDefaultInstance())
             .setResponse(
                 PartialRowResponse.newBuilder()
-                    .setTypedRowsBatch(TypedRowsBatch.newBuilder().setBatchData(batchBytes1).build())
+                    .setTypedRowsBatch(
+                        TypedRowsBatch.newBuilder().setBatchData(batchBytes1).build())
                     .setFlush(
                         PartialRowResponse.Flush.newBuilder()
                             .setChecksum(checksum1)
@@ -574,7 +573,8 @@ public class CbtTestProxyTypedReadRowsTest {
         TypedReadRowsResponse.newBuilder()
             .setResponse(
                 PartialRowResponse.newBuilder()
-                    .setTypedRowsBatch(TypedRowsBatch.newBuilder().setBatchData(batchBytes2).build())
+                    .setTypedRowsBatch(
+                        TypedRowsBatch.newBuilder().setBatchData(batchBytes2).build())
                     .build())
             .build());
 
@@ -583,7 +583,8 @@ public class CbtTestProxyTypedReadRowsTest {
             .setResponse(
                 PartialRowResponse.newBuilder()
                     .setReset(true)
-                    .setTypedRowsBatch(TypedRowsBatch.newBuilder().setBatchData(batchBytes3).build())
+                    .setTypedRowsBatch(
+                        TypedRowsBatch.newBuilder().setBatchData(batchBytes3).build())
                     .setFlush(
                         PartialRowResponse.Flush.newBuilder()
                             .setChecksum(checksum3)
@@ -614,7 +615,8 @@ public class CbtTestProxyTypedReadRowsTest {
             .setTableSchema(TableSchema.getDefaultInstance())
             .setResponse(
                 PartialRowResponse.newBuilder()
-                    .setTypedRowsBatch(TypedRowsBatch.newBuilder().setBatchData(batchBytes1).build())
+                    .setTypedRowsBatch(
+                        TypedRowsBatch.newBuilder().setBatchData(batchBytes1).build())
                     .setFlush(
                         PartialRowResponse.Flush.newBuilder()
                             .setChecksum(checksum1)

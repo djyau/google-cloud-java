@@ -33,6 +33,8 @@ import com.google.bigtable.v2.ArrayValue;
 import com.google.bigtable.v2.Column;
 import com.google.bigtable.v2.Family;
 import com.google.bigtable.v2.Row;
+import com.google.bigtable.v2.TypedColumn;
+import com.google.bigtable.v2.TypedFamily;
 import com.google.bigtable.v2.Value;
 import com.google.cloud.Date;
 import com.google.cloud.bigtable.data.v2.BigtableDataClient;
@@ -58,6 +60,7 @@ import com.google.cloud.bigtable.testproxy.CloudBigtableV2TestProxyGrpc.CloudBig
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.protobuf.ByteString;
+import com.google.protobuf.Timestamp;
 import com.google.protobuf.util.Durations;
 import com.google.protobuf.util.Timestamps;
 import com.google.rpc.Code;
@@ -515,8 +518,7 @@ public class CbtTestProxy extends CloudBigtableV2TestProxyImplBase implements Cl
       responseObserver.onCompleted();
       return;
     } catch (StatusRuntimeException e) {
-      responseObserver.onNext(
-          resultBuilder.setStatus(StatusProto.fromThrowable(e)).build());
+      responseObserver.onNext(resultBuilder.setStatus(StatusProto.fromThrowable(e)).build());
       responseObserver.onCompleted();
       return;
     } catch (RuntimeException e) {
@@ -634,7 +636,7 @@ public class CbtTestProxy extends CloudBigtableV2TestProxyImplBase implements Cl
         case TIMESTAMP:
           Instant ts = rowKey.getTimestamp(i);
           valBuilder.setTimestampValue(
-              com.google.protobuf.Timestamp.newBuilder()
+              Timestamp.newBuilder()
                   .setSeconds(ts.getEpochSecond())
                   .setNanos(ts.getNano())
                   .build());
@@ -661,12 +663,10 @@ public class CbtTestProxy extends CloudBigtableV2TestProxyImplBase implements Cl
         com.google.bigtable.v2.TypedRow.newBuilder();
 
     if (row.getRowKey().isRaw()) {
-      rowBuilder.setRowKey(
-          Value.newBuilder().setRawValue(row.getRowKey().getRaw()).build());
+      rowBuilder.setRowKey(Value.newBuilder().setRawValue(row.getRowKey().getRaw()).build());
     } else {
       rowBuilder.setRowKey(
-          convertStructuredRowKey(
-              row.getRowKey(), row.getTableSchema().getRowKeySchema().get()));
+          convertStructuredRowKey(row.getRowKey(), row.getTableSchema().getRowKeySchema().get()));
     }
 
     Map<String, Map<TypedQualifier, List<TypedCell>>> grouped =
@@ -676,20 +676,17 @@ public class CbtTestProxy extends CloudBigtableV2TestProxyImplBase implements Cl
                     TypedCell::getFamily,
                     LinkedHashMap::new,
                     Collectors.groupingBy(
-                        TypedCell::getTypedQualifier,
-                        LinkedHashMap::new,
-                        Collectors.toList())));
+                        TypedCell::getTypedQualifier, LinkedHashMap::new, Collectors.toList())));
 
     for (Map.Entry<String, Map<TypedQualifier, List<TypedCell>>> famEntry : grouped.entrySet()) {
-      com.google.bigtable.v2.TypedFamily.Builder familyBuilder =
+      TypedFamily.Builder familyBuilder =
           rowBuilder.addFamiliesBuilder().setFamilyName(famEntry.getKey());
 
       for (Map.Entry<TypedQualifier, List<TypedCell>> colEntry : famEntry.getValue().entrySet()) {
-        com.google.bigtable.v2.TypedColumn.Builder colBuilder =
+        TypedColumn.Builder colBuilder =
             familyBuilder
                 .addColumnsBuilder()
-                .setQualifier(
-                    Value.newBuilder().setRawValue(colEntry.getKey().getBytes()).build());
+                .setQualifier(Value.newBuilder().setRawValue(colEntry.getKey().getBytes()).build());
 
         for (TypedCell cell : colEntry.getValue()) {
           colBuilder
