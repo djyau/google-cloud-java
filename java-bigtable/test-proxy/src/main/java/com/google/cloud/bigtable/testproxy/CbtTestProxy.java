@@ -108,6 +108,10 @@ public class CbtTestProxy extends CloudBigtableV2TestProxyImplBase implements Cl
     abstract BigtableDataClient dataClient();
   }
 
+  /**
+   * Registers a pre-configured {@link CbtClient} in the proxy's client map so unit tests can inject
+   * an in-process {@link BigtableDataClient} without going through the {@code CreateClient} RPC.
+   */
   @VisibleForTesting
   void registerClientForTest(String clientId, CbtClient client) {
     idClientMap.put(clientId, client);
@@ -480,6 +484,10 @@ public class CbtTestProxy extends CloudBigtableV2TestProxyImplBase implements Cl
     responseObserver.onCompleted();
   }
 
+  /**
+   * Executes a {@code TypedReadRows} request against the target {@link BigtableDataClient} and
+   * returns the resulting {@link com.google.bigtable.v2.TypedRow} protos and RPC status.
+   */
   @Override
   public void typedReadRows(
       TypedReadRowsRequest request, StreamObserver<TypedRowsResult> responseObserver) {
@@ -605,6 +613,10 @@ public class CbtTestProxy extends CloudBigtableV2TestProxyImplBase implements Cl
     return resultBuilder;
   }
 
+  /**
+   * Converts a structured {@link TypedRowKey} into a protobuf {@link Value} containing an {@link
+   * ArrayValue} by reading each field through its typed getter according to {@code schema}.
+   */
   private static Value convertStructuredRowKey(TypedRowKey rowKey, SqlType.Struct schema) {
     ArrayValue.Builder arrayBuilder = ArrayValue.newBuilder();
     for (int i = 0; i < schema.getFields().size(); i++) {
@@ -658,6 +670,10 @@ public class CbtTestProxy extends CloudBigtableV2TestProxyImplBase implements Cl
     return Value.newBuilder().setArrayValue(arrayBuilder.build()).build();
   }
 
+  /**
+   * Converts a logical {@link TypedRow} from the Java SDK into a protobuf {@link
+   * com.google.bigtable.v2.TypedRow}, preserving family, column qualifier, and cell ordering.
+   */
   private static com.google.bigtable.v2.TypedRow convertTypedRow(TypedRow row) {
     com.google.bigtable.v2.TypedRow.Builder rowBuilder =
         com.google.bigtable.v2.TypedRow.newBuilder();
@@ -702,8 +718,9 @@ public class CbtTestProxy extends CloudBigtableV2TestProxyImplBase implements Cl
   }
 
   /**
-   * Helper method to convert rows from type com.google.cloud.bigtable.data.v2.models.TypedRow to
-   * proto type com.google.bigtable.v2.TypedRow.
+   * Reads logical {@link TypedRow}s from {@code rows}, appends their converted protobuf
+   * representations to {@code resultBuilder}, and cancels the stream early if {@code
+   * cancelAfterRows} is reached.
    *
    * @param rows Logical rows in ServerStream<TypedRow>
    * @param cancelAfterRows Ignore the results after this row if set positive
