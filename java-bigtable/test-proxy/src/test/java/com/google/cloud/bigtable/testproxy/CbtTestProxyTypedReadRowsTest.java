@@ -194,6 +194,11 @@ public class CbtTestProxyTypedReadRowsTest {
     return results.get(0);
   }
 
+  /**
+   * Verifies that a standard TypedReadRows stream with unstructured row keys, column families,
+   * qualifiers, cell values, microsecond timestamps, and labels is decoded and returned in order
+   * with Status.OK.
+   */
   @Test
   public void testTypedReadRows_successfulStream() throws Exception {
     TypedRow row1 = createRow("rk-1", "cf1", "cq1", "val1");
@@ -221,6 +226,11 @@ public class CbtTestProxyTypedReadRowsTest {
     assertThat(result.getRowsList()).containsExactly(row1, row2).inOrder();
   }
 
+  /**
+   * Verifies that structured row keys containing all 8 supported scalar types (STRING, BYTES,
+   * INT64, FLOAT64, FLOAT32, BOOL, TIMESTAMP, DATE) and NULL values are converted into a
+   * Value.array_value matching the table's row_key_schema.
+   */
   @Test
   public void testTypedReadRows_structuredRowKeys() throws Exception {
     TableSchema structuredSchema =
@@ -324,6 +334,10 @@ public class CbtTestProxyTypedReadRowsTest {
     assertThat(result.getRowsList()).containsExactly(structuredRow);
   }
 
+  /**
+   * Verifies that a serialized TypedRows batch split across multiple PartialRowResponse messages is
+   * buffered and reassembled into a complete row once a Flush message arrives.
+   */
   @Test
   public void testTypedReadRows_fragmentedBatchReassembly() throws Exception {
     TypedRow row = createRow("rk-frag", "cf", "col", "value");
@@ -363,6 +377,10 @@ public class CbtTestProxyTypedReadRowsTest {
     assertThat(result.getRows(0).getRowKey().getRawValue().toStringUtf8()).isEqualTo("rk-frag");
   }
 
+  /**
+   * Verifies that when the server sends a PartialRowResponse with reset=true, any previously
+   * buffered (unflushed) batch bytes are discarded before processing the new batch.
+   */
   @Test
   public void testTypedReadRows_resetDiscardsBufferedData() throws Exception {
     TypedRow row = createRow("rk-valid", "cf", "col", "val");
@@ -404,6 +422,10 @@ public class CbtTestProxyTypedReadRowsTest {
     assertThat(result.getRows(0).getRowKey().getRawValue().toStringUtf8()).isEqualTo("rk-valid");
   }
 
+  /**
+   * Verifies that a CRC32C checksum mismatch on a Flush message fails the stream and returns
+   * Status.UNAVAILABLE in the TypedRowsResult.
+   */
   @Test
   public void testTypedReadRows_checksumMismatchReturnsUnavailable() throws Exception {
     TypedRow row = createRow("rk-bad-crc", "cf", "col", "val");
@@ -429,6 +451,10 @@ public class CbtTestProxyTypedReadRowsTest {
     assertThat(result.getStatus().getMessage()).contains("Checksum mismatch");
   }
 
+  /**
+   * Verifies that setting cancel_after_rows stops consuming the stream after the specified number
+   * of rows, cancels the underlying gRPC stream, and returns Status.OK with only those rows.
+   */
   @Test
   public void testTypedReadRows_cancelAfterRowsStopsStream() throws Exception {
     mockBigtableService.keepStreamOpen = true;
@@ -465,6 +491,10 @@ public class CbtTestProxyTypedReadRowsTest {
     assertThat(mockBigtableService.streamCancelled.get()).isTrue();
   }
 
+  /**
+   * Verifies that a gRPC error returned by the Bigtable server is caught and propagated in the
+   * TypedRowsResult.status field rather than failing the test proxy RPC itself.
+   */
   @Test
   public void testTypedReadRows_serverErrorPropagatedInStatus() throws Exception {
     mockBigtableService.errorToThrow =
@@ -475,6 +505,10 @@ public class CbtTestProxyTypedReadRowsTest {
     assertThat(result.getStatus().getMessage()).contains("Table does not exist");
   }
 
+  /**
+   * Verifies that a TypedReadRowsRequest missing both table_name and authorized_view_name is
+   * rejected before making an RPC and returns Status.INVALID_ARGUMENT in TypedRowsResult.
+   */
   @Test
   public void testTypedReadRows_missingTargetReturnsInvalidArgument() throws Exception {
     TypedReadRowsRequest request =
@@ -487,6 +521,10 @@ public class CbtTestProxyTypedReadRowsTest {
     assertThat(result.getStatus().getCode()).isEqualTo(Code.INVALID_ARGUMENT_VALUE);
   }
 
+  /**
+   * Verifies that multiple flushed batches in a single stream properly chain the running CRC32C
+   * checksum across flushes and emit all rows in order.
+   */
   @Test
   public void testTypedReadRows_multiBatchRunningCrc32c() throws Exception {
     TypedRow row1 = createRow("rk-1", "cf", "col", "val1");
@@ -535,24 +573,29 @@ public class CbtTestProxyTypedReadRowsTest {
     assertThat(result.getRows(1).getRowKey().getRawValue().toStringUtf8()).isEqualTo("rk-2");
   }
 
+  /**
+   * Verifies that when a reset occurs after a batch has already been flushed, the previously
+   * flushed rows and their running CRC32C state are preserved, while the uncommitted batch buffered
+   * since the last Flush is discarded and replaced by the re-sent batch.
+   */
   @Test
   public void testTypedReadRows_resetRollsBackToLastResumeToken() throws Exception {
-    // 1. Batch 1 committed with resume token "tok-1"
-    TypedRow row1 = createRow("rk-committed", "cf", "col", "val1");
+    // 1. Batch 1 (row 1) is committed with resume token "tok-1"
+    TypedRow row1 = createRow("rk-1", "cf", "col", "val1");
     TypedRows batch1 = TypedRows.newBuilder().addRows(row1).build();
     ByteString batchBytes1 = batch1.toByteString();
     int checksum1 = computeBatchChecksum(batchBytes1, 0);
 
-    // 2. Batch 2 buffered (unflushed / uncommitted)
-    TypedRow row2 = createRow("rk-uncommitted", "cf", "col", "val2");
-    TypedRows batch2 = TypedRows.newBuilder().addRows(row2).build();
-    ByteString batchBytes2 = batch2.toByteString();
+    // 2. Batch 2 (row 2 with incomplete/bad data) is buffered without a flush
+    TypedRow row2Incomplete = createRow("rk-2", "cf", "col", "val2-incomplete");
+    TypedRows batch2Bad = TypedRows.newBuilder().addRows(row2Incomplete).build();
+    ByteString batchBytes2Bad = batch2Bad.toByteString();
 
-    // 3. Reset occurs, discarding batch 2, followed by Batch 3 with resume token "tok-3"
-    TypedRow row3 = createRow("rk-after-reset", "cf", "col", "val3");
-    TypedRows batch3 = TypedRows.newBuilder().addRows(row3).build();
-    ByteString batchBytes3 = batch3.toByteString();
-    int checksum3 = computeBatchChecksum(batchBytes3, checksum1);
+    // 3. Reset occurs, discarding the uncommitted batch 2, and re-sends row 2 with complete data
+    TypedRow row2Complete = createRow("rk-2", "cf", "col", "val2-complete");
+    TypedRows batch2Good = TypedRows.newBuilder().addRows(row2Complete).build();
+    ByteString batchBytes2Good = batch2Good.toByteString();
+    int checksum2 = computeBatchChecksum(batchBytes2Good, checksum1);
 
     mockBigtableService.responses.add(
         TypedReadRowsResponse.newBuilder()
@@ -574,7 +617,7 @@ public class CbtTestProxyTypedReadRowsTest {
             .setResponse(
                 PartialRowResponse.newBuilder()
                     .setTypedRowsBatch(
-                        TypedRowsBatch.newBuilder().setBatchData(batchBytes2).build())
+                        TypedRowsBatch.newBuilder().setBatchData(batchBytes2Bad).build())
                     .build())
             .build());
 
@@ -584,25 +627,24 @@ public class CbtTestProxyTypedReadRowsTest {
                 PartialRowResponse.newBuilder()
                     .setReset(true)
                     .setTypedRowsBatch(
-                        TypedRowsBatch.newBuilder().setBatchData(batchBytes3).build())
+                        TypedRowsBatch.newBuilder().setBatchData(batchBytes2Good).build())
                     .setFlush(
                         PartialRowResponse.Flush.newBuilder()
-                            .setChecksum(checksum3)
-                            .setResumeToken(ByteString.copyFromUtf8("tok-3"))
+                            .setChecksum(checksum2)
+                            .setResumeToken(ByteString.copyFromUtf8("tok-2"))
                             .build())
                     .build())
             .build());
 
     TypedRowsResult result = executeTypedReadRows(defaultTableRequest());
     assertThat(result.getStatus().getCode()).isEqualTo(Code.OK_VALUE);
-    // row2 must have been discarded on reset, leaving only row1 and row3
-    assertThat(result.getRowsCount()).isEqualTo(2);
-    assertThat(result.getRows(0).getRowKey().getRawValue().toStringUtf8())
-        .isEqualTo("rk-committed");
-    assertThat(result.getRows(1).getRowKey().getRawValue().toStringUtf8())
-        .isEqualTo("rk-after-reset");
+    assertThat(result.getRowsList()).containsExactly(row1, row2Complete).inOrder();
   }
 
+  /**
+   * Verifies that if the server fails mid-stream with a non-retryable error after flushing a batch,
+   * the already-flushed rows are preserved in TypedRowsResult alongside the error status.
+   */
   @Test
   public void testTypedReadRows_midStreamErrorPreservesCommittedRows() throws Exception {
     TypedRow row1 = createRow("rk-committed", "cf", "col", "val1");
@@ -633,6 +675,10 @@ public class CbtTestProxyTypedReadRowsTest {
     assertThat(result.getRowsList()).containsExactly(row1);
   }
 
+  /**
+   * Verifies that calling typedReadRows with an unregistered client_id fails the StreamObserver
+   * directly with Status.NOT_FOUND via getClient().
+   */
   @Test
   public void testTypedReadRows_unknownClientIdReturnsNotFoundOnObserver() throws Exception {
     CountDownLatch latch = new CountDownLatch(1);
