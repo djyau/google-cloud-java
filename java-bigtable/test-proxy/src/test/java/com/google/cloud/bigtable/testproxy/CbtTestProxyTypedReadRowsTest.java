@@ -133,11 +133,7 @@ public class CbtTestProxyTypedReadRowsTest {
                                     Value.newBuilder()
                                         .setRawValue(ByteString.copyFromUtf8(val))
                                         .build())
-                                .setTimestamp(
-                                    Timestamp.newBuilder()
-                                        .setSeconds(12345)
-                                        .setNanos(678000)
-                                        .build())
+                                .setTimestampMicros(12345000678L)
                                 .addLabels("lbl-1")
                                 .build())
                         .build())

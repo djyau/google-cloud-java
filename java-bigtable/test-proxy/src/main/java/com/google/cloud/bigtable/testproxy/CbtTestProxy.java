@@ -62,7 +62,6 @@ import com.google.common.base.Preconditions;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.Timestamp;
 import com.google.protobuf.util.Durations;
-import com.google.protobuf.util.Timestamps;
 import com.google.rpc.Code;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Status;
@@ -707,7 +706,7 @@ public class CbtTestProxy extends CloudBigtableV2TestProxyImplBase implements Cl
         for (TypedCell cell : colEntry.getValue()) {
           colBuilder
               .addCellsBuilder()
-              .setTimestamp(Timestamps.fromMicros(cell.getTimestamp()))
+              .setTimestampMicros(cell.getTimestamp())
               .setValue(Value.newBuilder().setRawValue(cell.getBytesValue()).build())
               .addAllLabels(cell.getLabels());
         }
